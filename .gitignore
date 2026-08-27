@@ -1,0 +1,14 @@
+﻿.venv/
+.idea/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+.env
+*.csv
+*.zip
+*.pkl
+*.pt
+*.pth
+
+data/
