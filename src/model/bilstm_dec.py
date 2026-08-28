@@ -148,7 +148,8 @@ class BiLSTMDECModel(AnomalyDetectionModel):
 
         # ---- فاز ۱: پیش‌آموزش autoencoder (بدون خوشه‌بندی) ----
         self._network.train()
-        for _ in range(self.pretrain_epochs):
+        for epoch in range(1, self.pretrain_epochs + 1):
+            epoch_loss = 0.0
             for (batch,) in train_loader:
                 batch = batch.to(self.device)
                 reconstructed, _, _ = self._network(batch)
@@ -157,6 +158,9 @@ class BiLSTMDECModel(AnomalyDetectionModel):
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self._network.parameters(), max_norm=5.0)
                 optimizer.step()
+                epoch_loss += loss.item()
+            print(f"[BiLSTM-DEC] Pretrain epoch {epoch}/{self.pretrain_epochs} "
+                  f"| MSE: {epoch_loss / max(len(train_loader), 1):.6f}")
 
         # ---- مقداردهی اولیه‌ی مراکز خوشه با KMeans روی latent space ----
         latent_vectors = self._extract_latent_vectors(train_sequences)
@@ -168,12 +172,13 @@ class BiLSTMDECModel(AnomalyDetectionModel):
 
         # ---- فاز ۲: آموزش مشترک (reconstruction + gamma * clustering) ----
         train_tensor = torch.from_numpy(train_sequences)
-        for _ in range(self.fine_tune_epochs):
+        for epoch in range(1, self.fine_tune_epochs + 1):
             targets = self._compute_dec_targets(train_sequences)
             joint_loader = DataLoader(
                 TensorDataset(train_tensor, targets), batch_size=self.batch_size, shuffle=True, num_workers=0
             )
             self._network.train()
+            epoch_joint_loss = 0.0
             for batch, batch_targets in joint_loader:
                 batch = batch.to(self.device)
                 batch_targets = batch_targets.to(self.device)
@@ -189,6 +194,9 @@ class BiLSTMDECModel(AnomalyDetectionModel):
                 joint_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self._network.parameters(), max_norm=5.0)
                 optimizer.step()
+                epoch_joint_loss += joint_loss.item()
+            print(f"[BiLSTM-DEC] Fine-tune epoch {epoch}/{self.fine_tune_epochs} "
+                  f"| Joint loss: {epoch_joint_loss / max(len(joint_loader), 1):.6f}")
 
         return self
 
