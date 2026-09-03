@@ -139,7 +139,33 @@ class BiLSTMDECModel(AnomalyDetectionModel):
         tensor = torch.from_numpy(np.asarray(sequences, dtype=np.float32))
         return DataLoader(TensorDataset(tensor), batch_size=self.batch_size, shuffle=shuffle, num_workers=0)
 
-    def fit(self, train_sequences: np.ndarray) -> "BiLSTMDECModel":
+    def _compute_validation_reconstruction_loss(self, validation_sequences: np.ndarray) -> float:
+        """
+        فقط خطای بازسازی (نه joint loss) را روی validation حساب می‌کند —
+        بدون هیچ لیبلی. این معیار برای early stopping استفاده می‌شود.
+        """
+        loader = self._make_loader(validation_sequences, shuffle=False)
+        total_loss = 0.0
+        self._network.eval()
+        with torch.no_grad():
+            for (batch,) in loader:
+                batch = batch.to(self.device)
+                reconstructed, _, _ = self._network(batch)
+                total_loss += functional.mse_loss(reconstructed, batch).item()
+        return total_loss / max(len(loader), 1)
+
+    def fit(self, train_sequences: np.ndarray, validation_sequences: np.ndarray = None) -> "BiLSTMDECModel":
+        """
+        validation_sequences (اختیاری، بدون لیبل): اگر داده شود، بعد از هر
+        epoch فاز fine-tuning، خطای بازسازی روی آن اندازه‌گیری می‌شود و
+        بهترین نسخه (نه لزوماً آخرین نسخه) در پایان بازگردانده می‌شود.
+
+        چرا بدون لیبل؟ چون اگر از لیبل validation برای انتخاب «کدام
+        epoch بهتر است» استفاده کنیم، دیگر فقط calibration نیست — داریم
+        با کمک لیبل تصمیم می‌گیریم کدام وزن‌های مدل نگه داشته شوند. این
+        با ادعای «آموزش کاملاً بدون‌نظارت» فاصله دارد. خطای بازسازی
+        (MSE) یک معیار کاملاً بدون‌نظارت است و همین کفایت می‌کند.
+        """
         train_sequences = np.asarray(train_sequences, dtype=np.float32)
         n_features = train_sequences.shape[2]
         self._network = self._build_network(n_features)
@@ -170,7 +196,10 @@ class BiLSTMDECModel(AnomalyDetectionModel):
             torch.as_tensor(kmeans.cluster_centers_, dtype=torch.float32, device=self.device)
         )
 
-        # ---- فاز ۲: آموزش مشترک (reconstruction + gamma * clustering) ----
+        # ---- فاز ۲: آموزش مشترک (reconstruction + gamma * clustering) با early stopping اختیاری ----
+        best_validation_loss = float("inf")
+        best_state_dict = None
+
         train_tensor = torch.from_numpy(train_sequences)
         for epoch in range(1, self.fine_tune_epochs + 1):
             targets = self._compute_dec_targets(train_sequences)
@@ -195,8 +224,22 @@ class BiLSTMDECModel(AnomalyDetectionModel):
                 torch.nn.utils.clip_grad_norm_(self._network.parameters(), max_norm=5.0)
                 optimizer.step()
                 epoch_joint_loss += joint_loss.item()
-            print(f"[BiLSTM-DEC] Fine-tune epoch {epoch}/{self.fine_tune_epochs} "
-                  f"| Joint loss: {epoch_joint_loss / max(len(joint_loader), 1):.6f}")
+
+            log_line = (f"[BiLSTM-DEC] Fine-tune epoch {epoch}/{self.fine_tune_epochs} "
+                        f"| Joint loss: {epoch_joint_loss / max(len(joint_loader), 1):.6f}")
+
+            if validation_sequences is not None:
+                validation_loss = self._compute_validation_reconstruction_loss(validation_sequences)
+                log_line += f" | Val recon MSE: {validation_loss:.6f}"
+                if validation_loss < best_validation_loss:
+                    best_validation_loss = validation_loss
+                    best_state_dict = {k: v.clone() for k, v in self._network.state_dict().items()}
+                    log_line += " (new best)"
+            print(log_line)
+
+        if validation_sequences is not None and best_state_dict is not None:
+            self._network.load_state_dict(best_state_dict)
+            print(f"[BiLSTM-DEC] Restored best epoch (validation recon MSE: {best_validation_loss:.6f})")
 
         return self
 

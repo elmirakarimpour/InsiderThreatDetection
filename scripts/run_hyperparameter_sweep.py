@@ -49,16 +49,28 @@ def main():
         X_train, X_val, y_val,
         search_space=DEFAULT_SEARCH_SPACE,
         fixed_kwargs=dict(
-            n_clusters=3, encoder_size=32, latent_size=16,
+            encoder_size=32, latent_size=16,
             pretrain_epochs=3, fine_tune_epochs=3, batch_size=256,
         ),
     )
 
-    print("\n--- Sweep results, best to worst (by validation ROC-AUC) ---")
+    print("\n--- Ranked by F1 (primary criterion, at F-beta-tuned threshold) ---")
     for rank, result in enumerate(results, start=1):
         print(f"{rank}. {result}")
 
-    print(f"\nBest configuration: {results[0]}")
+    print("\n--- Same results, re-sorted by ROC-AUC (for cross-check) ---")
+    by_auc = sorted(results, key=lambda r: r["roc_auc"], reverse=True)
+    for rank, result in enumerate(by_auc, start=1):
+        print(f"{rank}. {result}")
+
+    best_by_f1 = results[0]
+    best_by_auc = by_auc[0]
+    print(f"\nBest by F1:      {best_by_f1}")
+    print(f"Best by ROC-AUC: {best_by_auc}")
+    if best_by_f1 == best_by_auc:
+        print("-> Both criteria agree on the same configuration.")
+    else:
+        print("-> Criteria disagree — review both before deciding.")
 
 
 if __name__ == "__main__":

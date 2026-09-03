@@ -152,6 +152,68 @@ def bootstrap_confidence_interval(
     }
 
 
+def bootstrap_metric_difference(
+    y_true: np.ndarray,
+    scores_a: np.ndarray,
+    scores_b: np.ndarray,
+    threshold_a: float,
+    threshold_b: float,
+    metric_fn,
+    n_bootstrap: int = 1000,
+    confidence_level: float = 0.95,
+    seed: int = 42,
+) -> dict:
+    """
+    بازه‌ی اطمینان برای تفاوت یک معیار (مثلاً F1) بین دو مدل، روی دقیقاً
+    همان نمونه‌های test، با resampling جفتی (paired) — یعنی در هر تکرار
+    bootstrap، هر دو مدل روی همان زیرنمونه‌ی تصادفی ارزیابی می‌شوند تا
+    مقایسه منصفانه بماند.
+
+    اگر بازه‌ی اطمینان تفاوت شامل صفر نباشد، یعنی تفاوت دو مدل در این
+    معیار، با اطمینان آماری، واقعی است — نه نتیجه‌ی شانس یک اجرا.
+    """
+    y_true = np.asarray(y_true, dtype=np.int8)
+    scores_a = np.asarray(scores_a, dtype=float)
+    scores_b = np.asarray(scores_b, dtype=float)
+    rng = np.random.default_rng(seed)
+    n_samples = len(y_true)
+
+    def _metric_for(y, s, threshold):
+        predicted = (s >= threshold).astype(np.int8)
+        return metric_fn(y, predicted)
+
+    point_difference = _metric_for(y_true, scores_a, threshold_a) - _metric_for(y_true, scores_b, threshold_b)
+
+    bootstrap_differences = []
+    for _ in range(n_bootstrap):
+        sample_indices = rng.integers(0, n_samples, size=n_samples)
+        y_sample = y_true[sample_indices]
+        if len(np.unique(y_sample)) < 2:
+            continue
+        metric_a = _metric_for(y_sample, scores_a[sample_indices], threshold_a)
+        metric_b = _metric_for(y_sample, scores_b[sample_indices], threshold_b)
+        bootstrap_differences.append(metric_a - metric_b)
+
+    if not bootstrap_differences:
+        raise ValueError("هیچ نمونه‌ی bootstrap معتبری ساخته نشد.")
+
+    bootstrap_differences = np.array(bootstrap_differences)
+    alpha = 1.0 - confidence_level
+    lower_bound = float(np.percentile(bootstrap_differences, 100 * alpha / 2))
+    upper_bound = float(np.percentile(bootstrap_differences, 100 * (1 - alpha / 2)))
+    fraction_non_positive = float(np.mean(bootstrap_differences <= 0))
+
+    return {
+        "point_difference": float(point_difference),
+        "confidence_level": confidence_level,
+        "lower_bound": lower_bound,
+        "upper_bound": upper_bound,
+        "excludes_zero": (lower_bound > 0) or (upper_bound < 0),
+        "fraction_bootstrap_non_positive": fraction_non_positive,
+        "n_bootstrap_used": len(bootstrap_differences),
+    }
+
+
 def mcnemar_test(y_true: np.ndarray, predictions_a: np.ndarray, predictions_b: np.ndarray) -> dict:
     """
     تست McNemar برای مقایسه‌ی دو تصمیم قطعی (۰/۱، بعد از اعمال threshold)
