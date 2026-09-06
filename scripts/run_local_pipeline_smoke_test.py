@@ -50,6 +50,7 @@ def build_or_load_windows():
             "window_end_date": cached["window_end_date"],
             "eval_only_label_any": cached["eval_only_label_any"],
             "eval_only_label_full": cached["eval_only_label_full"],
+            "feature_names": cached["feature_names"],
         }
 
     print("--- Step 1: Building daily behavioral profiles (full dataset) ---")
@@ -93,7 +94,7 @@ def build_or_load_windows():
     print(f"Sequence array shape: {windows['features'].shape}")
 
     WINDOWS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(WINDOWS_CACHE_PATH, **windows)
+    np.savez_compressed(WINDOWS_CACHE_PATH, feature_names=np.array(feature_names), **windows)
     print(f"Windows cached to {WINDOWS_CACHE_PATH} for future runs.")
 
     return windows
